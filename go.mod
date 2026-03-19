@@ -1,4 +1,4 @@
-module github.com/qiangxue/go-rest-api
+module github.com/harunoztekin50/go-rest-api-monolith.git
 
 go 1.13
 

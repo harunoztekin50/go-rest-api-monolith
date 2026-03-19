@@ -4,106 +4,84 @@ PACKAGES := $(shell go list ./... | grep -v /vendor/)
 LDFLAGS := -ldflags "-X main.Version=${VERSION}"
 
 CONFIG_FILE ?= ./config/local.yml
-APP_DSN ?= $(shell sed -n 's/^dsn:[[:space:]]*"\(.*\)"/\1/p' $(CONFIG_FILE))
-MIGRATE := docker run -v $(shell pwd)/migrations:/migrations --network host migrate/migrate:v4.10.0 -path=/migrations/ -database "$(APP_DSN)"
+# DSN'i config'den çekemezse diye güvenli bir varsayılan bırakıyoruz
+APP_DSN ?= postgres://postgres:postgres@localhost:5432/go_restful?sslmode=disable
 
-PID_FILE := './.pid'
-FSWATCH_FILE := './fswatch.cfg'
+# Docker üzerindeki migrate aracını her yerde çalışacak şekilde optimize ettik
+# localhost yerine host.docker.internal kullanarak konteyner-host iletişimini çözdük
+MIGRATE := docker run --rm -v $(shell pwd)/migrations:/migrations migrate/migrate:v4.10.0 -path=/migrations/ -database "$(subst localhost,host.docker.internal,$(APP_DSN))"
 
-.PHONY: default
+.PHONY: default help
 default: help
 
-# generate help info from comments: thanks to https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
-.PHONY: help
-help: ## help information about make commands
+help: ## Komutlar hakkında yardım bilgisi gösterir
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: test
-test: ## run unit tests
-	@echo "mode: count" > coverage-all.out
-	@$(foreach pkg,$(PACKAGES), \
-		go test -p=1 -cover -covermode=count -coverprofile=coverage.out ${pkg}; \
-		tail -n +2 coverage.out >> coverage-all.out;)
-
-.PHONY: test-cover
-test-cover: test ## run unit tests and show test coverage information
-	go tool cover -html=coverage-all.out
-
-.PHONY: run
-run: ## run the API server
-	go run ${LDFLAGS} cmd/server/main.go
-
-.PHONY: run-restart
-run-restart: ## restart the API server
-	@pkill -P `cat $(PID_FILE)` || true
-	@printf '%*s\n' "80" '' | tr ' ' -
-	@echo "Source file changed. Restarting server..."
-	@go run ${LDFLAGS} cmd/server/main.go & echo $$! > $(PID_FILE)
-	@printf '%*s\n' "80" '' | tr ' ' -
-
-run-live: ## run the API server with live reload support (requires fswatch)
-	@go run ${LDFLAGS} cmd/server/main.go & echo $$! > $(PID_FILE)
-	@fswatch -x -o --event Created --event Updated --event Renamed -r internal pkg cmd config | xargs -n1 -I {} make run-restart
-
-.PHONY: build
-build:  ## build the API server binary
-	CGO_ENABLED=0 go build ${LDFLAGS} -a -o server $(MODULE)/cmd/server
-
-.PHONY: build-docker
-build-docker: ## build the API server as a docker image
-	docker build -f cmd/server/Dockerfile -t server .
-
-.PHONY: clean
-clean: ## remove temporary files
-	rm -rf server coverage.out coverage-all.out
-
-.PHONY: version
-version: ## display the version of the API server
-	@echo $(VERSION)
+# --- DATABASE İŞLEMLERİ ---
 
 .PHONY: db-start
-db-start: ## start the database server
-	@mkdir -p testdata/postgres
-	docker run --rm --name postgres -v $(shell pwd)/testdata:/testdata \
-		-v $(shell pwd)/testdata/postgres:/var/lib/postgresql/data \
-		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=go_restful -d -p 5432:5432 postgres
+db-start: ## Veritabanını (Postgres) Docker üzerinde başlatır
+	@docker rm -f postgres 2>/dev/null || true
+	docker run -d --name postgres \
+		-e POSTGRES_PASSWORD=postgres \
+		-e POSTGRES_DB=go_restful \
+		-p 5432:5432 \
+		postgres
+	@echo "Veritabanı uyanıyor (5sn)..."
+	@sleep 5
 
 .PHONY: db-stop
-db-stop: ## stop the database server
-	docker stop postgres
+db-stop: ## Veritabanı konteynerini durdurur ve siler
+	docker stop postgres && docker rm postgres
 
-.PHONY: testdata
-testdata: ## populate the database with test data
-	make migrate-reset
-	@echo "Populating test data..."
-	@docker exec -it postgres psql "$(APP_DSN)" -f /testdata/testdata.sql
-
-.PHONY: lint
-lint: ## run golint on all Go package
-	@golint $(PACKAGES)
-
-.PHONY: fmt
-fmt: ## run "go fmt" on all Go packages
-	@go fmt $(PACKAGES)
+# --- MIGRATION (GÖÇ) İŞLEMLERİ ---
 
 .PHONY: migrate
-migrate: ## run all new database migrations
-	@echo "Running all new database migrations..."
+migrate: ## Tüm yeni migration'ları (up) çalıştırır
+	@echo "Migration'lar uygulanıyor..."
 	@$(MIGRATE) up
 
 .PHONY: migrate-down
-migrate-down: ## revert database to the last migration step
-	@echo "Reverting database to the last migration step..."
+migrate-down: ## Son migration adımını geri alır (down 1)
+	@echo "Son işlem geri alınıyor..."
 	@$(MIGRATE) down 1
 
 .PHONY: migrate-new
-migrate-new: ## create a new database migration
-	@read -p "Enter the name of the new migration: " name; \
-	$(MIGRATE) create -ext sql -dir /migrations/ $${name// /_}
-
+migrate-new: ## Yeni bir migration dosyası oluşturur (Tarih formatı destekli)
+	@if [ -z "$(name)" ]; then \
+		read -p "Migration ismini girin (Örn: 20261903021200_user_table): " name_input; \
+		name=$$name_input; \
+	else \
+		name=$(name); \
+	fi; \
+	$(MIGRATE) create -ext sql -dir migrations -digits 14 $$name
+	
 .PHONY: migrate-reset
-migrate-reset: ## reset database and re-run all migrations
-	@echo "Resetting database..."
-	@$(MIGRATE) drop
-	@echo "Running all database migrations..."
+migrate-reset: ## Veritabanını tamamen sıfırlar ve tüm migration'ları baştan çalıştırır
+	@echo "Veritabanı sıfırlanıyor (Drop)..."
+	@$(MIGRATE) drop -f
+	@echo "Migration'lar baştan yükleniyor (Up)..."
 	@$(MIGRATE) up
+
+.PHONY: testdata
+testdata: migrate-reset ## Veritabanını sıfırlar ve test verilerini (testdata.sql) yükler
+	@echo "Test verileri içeri aktarılıyor..."
+	@docker exec -i postgres psql -U postgres -d go_restful < testdata/testdata.sql
+
+# --- UYGULAMA VE DERLEME ---
+
+.PHONY: run
+run: ## Uygulamayı (Server) çalıştırır
+	go run ${LDFLAGS} cmd/server/main.go
+
+.PHONY: build
+build: ## Uygulamayı binary olarak derler
+	CGO_ENABLED=0 go build ${LDFLAGS} -a -o server $(MODULE)/cmd/server
+
+.PHONY: fmt
+fmt: ## Tüm paketleri formatlar (go fmt)
+	@go fmt $(PACKAGES)
+
+.PHONY: version
+version: ## Uygulama versiyonunu gösterir
+	@echo $(VERSION)

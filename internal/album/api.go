@@ -2,9 +2,9 @@ package album
 
 import (
 	"github.com/go-ozzo/ozzo-routing/v2"
-	"github.com/qiangxue/go-rest-api/internal/errors"
-	"github.com/qiangxue/go-rest-api/pkg/log"
-	"github.com/qiangxue/go-rest-api/pkg/pagination"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/pagination"
 	"net/http"
 )
 

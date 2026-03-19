@@ -2,9 +2,9 @@ package auth
 
 import (
 	"context"
-	"github.com/qiangxue/go-rest-api/internal/entity"
-	"github.com/qiangxue/go-rest-api/internal/errors"
-	"github.com/qiangxue/go-rest-api/pkg/log"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/entity"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )

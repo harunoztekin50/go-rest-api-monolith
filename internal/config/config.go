@@ -1,11 +1,12 @@
 package config
 
 import (
-	"github.com/go-ozzo/ozzo-validation/v4"
+	"os"
+
+	validation "github.com/go-ozzo/ozzo-validation/v4"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
 	"github.com/qiangxue/go-env"
-	"github.com/qiangxue/go-rest-api/pkg/log"
 	"gopkg.in/yaml.v2"
-	"io/ioutil"
 )
 
 const (
@@ -42,7 +43,7 @@ func Load(file string, logger log.Logger) (*Config, error) {
 	}
 
 	// load from YAML config file
-	bytes, err := ioutil.ReadFile(file)
+	bytes, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}

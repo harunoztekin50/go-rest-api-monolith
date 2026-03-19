@@ -1,8 +1,8 @@
 package healthcheck
 
 import (
-	"github.com/qiangxue/go-rest-api/internal/test"
-	"github.com/qiangxue/go-rest-api/pkg/log"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/test"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
 	"net/http"
 	"testing"
 )

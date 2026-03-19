@@ -3,8 +3,8 @@ package album
 import (
 	"context"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
-	"github.com/qiangxue/go-rest-api/internal/entity"
-	"github.com/qiangxue/go-rest-api/pkg/log"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/entity"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
 	"time"
 )
 

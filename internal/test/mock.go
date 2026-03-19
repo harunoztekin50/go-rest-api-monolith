@@ -4,9 +4,9 @@ import (
 	routing "github.com/go-ozzo/ozzo-routing/v2"
 	"github.com/go-ozzo/ozzo-routing/v2/content"
 	"github.com/go-ozzo/ozzo-routing/v2/cors"
-	"github.com/qiangxue/go-rest-api/internal/errors"
-	"github.com/qiangxue/go-rest-api/pkg/accesslog"
-	"github.com/qiangxue/go-rest-api/pkg/log"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/accesslog"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
 	"net/http"
 	"net/http/httptest"
 )
