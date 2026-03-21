@@ -14,7 +14,8 @@ import (
 type Service interface {
 	// authenticate authenticates a user using username and password.
 	// It returns a JWT token if authentication succeeds. Otherwise, an error is returned.
-	Login(ctx context.Context, username, password string) (string, error)
+	loginWithEmail(ctx context.Context, username, password string) (string, error)
+	loginWithAnonymus(ctx context.Context, deviceKey string) (string, error)
 }
 
 // Identity represents an authenticated user identity.
@@ -38,26 +39,32 @@ func NewService(signingKey string, tokenExpiration int, logger log.Logger) Servi
 
 // Login authenticates a user and generates a JWT token if authentication succeeds.
 // Otherwise, an error is returned.
-func (s service) Login(ctx context.Context, username, password string) (string, error) {
-	if identity := s.authenticate(ctx, username, password); identity != nil {
-		return s.generateJWT(identity)
-	}
-	return "", errors.Unauthorized("")
-}
+func (s service) loginWithEmail(ctx context.Context, username, password string) (string, error) {
 
-// authenticate authenticates a user using username and password.
-// If username and password are correct, an identity is returned. Otherwise, nil is returned.
-func (s service) authenticate(ctx context.Context, username, password string) Identity {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
 	logger := s.logger.With(ctx, "user", username)
 
 	// TODO: the following authentication logic is only for demo purpose
+	var user entity.User
 	if username == "demo" && password == "pass" {
 		logger.Infof("authentication successful")
-		return entity.User{ID: "100", Name: "demo"}
+		user = entity.User{ID: "100", Name: "demo"}
 	}
 
-	logger.Infof("authentication failed")
-	return nil
+	return s.generateJWT(user)
+}
+
+func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (string, error) {
+	// sistemde kulanıcı var mı
+	// JWt token hazrılanır kulanıcı için
+	// JWT return edilir
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	return "", errors.Unauthorized("")
 }
 
 // generateJWT generates a JWT that encodes an identity.
@@ -65,6 +72,6 @@ func (s service) generateJWT(identity Identity) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"id":   identity.GetID(),
 		"name": identity.GetName(),
-		"exp":  time.Now().Add(time.Duration(s.tokenExpiration) * time.Hour).Unix(),
+		"exp":  time.Now().Add(time.Duration(s.tokenExpiration) * time.Minute).Unix(),
 	}).SignedString([]byte(s.signingKey))
 }

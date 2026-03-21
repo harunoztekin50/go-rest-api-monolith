@@ -8,11 +8,13 @@ import (
 
 // RegisterHandlers registers handlers for different HTTP requests.
 func RegisterHandlers(rg *routing.RouteGroup, service Service, logger log.Logger) {
-	rg.Post("/login", login(service, logger))
+	rg.Post("/login/email-pass", loginWithEmail(service, logger))
+	rg.Post("/login/anonymus", loginWithAnonymus(service, logger))
+
 }
 
-// login returns a handler that handles user login request.
-func login(service Service, logger log.Logger) routing.Handler {
+// loginWithEmail returns a handler that handles user loginWithEmail request.
+func loginWithEmail(service Service, logger log.Logger) routing.Handler {
 	return func(c *routing.Context) error {
 		var req struct {
 			Username string `json:"username"`
@@ -24,7 +26,7 @@ func login(service Service, logger log.Logger) routing.Handler {
 			return errors.BadRequest("")
 		}
 
-		token, err := service.Login(c.Request.Context(), req.Username, req.Password)
+		token, err := service.loginWithEmail(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			return err
 		}
@@ -32,4 +34,26 @@ func login(service Service, logger log.Logger) routing.Handler {
 			Token string `json:"token"`
 		}{token})
 	}
+}
+
+func loginWithAnonymus(service Service, logger log.Logger) routing.Handler {
+	return func(c *routing.Context) error {
+		var req struct {
+			deviceKey string `json:"device_key"`
+		}
+
+		if err := c.Read(&req); err != nil {
+			logger.With(c.Request.Context()).Errorf("invalid request: %v", err)
+			return errors.BadRequest("")
+		}
+
+		token, err := service.loginWithAnonymus(c.Request.Context(), req.deviceKey)
+		if err != nil {
+			return err
+		}
+		return c.Write(struct {
+			Token string `json:"token"`
+		}{token})
+	}
+
 }

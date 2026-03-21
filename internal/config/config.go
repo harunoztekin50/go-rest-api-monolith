@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	defaultServerPort         = 8080
-	defaultJWTExpirationHours = 72
+	defaultServerPort       = 8080
+	defaultJWTExpirationmin = 15
 )
 
 // Config represents an application configuration.
@@ -39,7 +39,7 @@ func Load(file string, logger log.Logger) (*Config, error) {
 	// default config
 	c := Config{
 		ServerPort:    defaultServerPort,
-		JWTExpiration: defaultJWTExpirationHours,
+		JWTExpiration: defaultJWTExpirationmin,
 	}
 
 	// load from YAML config file

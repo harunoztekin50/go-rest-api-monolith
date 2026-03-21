@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"github.com/go-ozzo/ozzo-dbx"
-	"github.com/go-ozzo/ozzo-routing/v2"
+	"net/http"
+	"os"
+	"time"
+
+	dbx "github.com/go-ozzo/ozzo-dbx"
+	routing "github.com/go-ozzo/ozzo-routing/v2"
 	"github.com/go-ozzo/ozzo-routing/v2/content"
 	"github.com/go-ozzo/ozzo-routing/v2/cors"
-	_ "github.com/lib/pq"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/album"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/auth"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/config"
@@ -18,9 +21,7 @@ import (
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/accesslog"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/dbcontext"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
-	"net/http"
-	"os"
-	"time"
+	_ "github.com/lib/pq"
 )
 
 // Version indicates the current version of the application.
@@ -57,8 +58,11 @@ func main() {
 	// build HTTP server
 	address := fmt.Sprintf(":%v", cfg.ServerPort)
 	hs := &http.Server{
-		Addr:    address,
-		Handler: buildHandler(logger, dbcontext.New(db), cfg),
+		Addr:         address,
+		Handler:      buildHandler(logger, dbcontext.New(db), cfg),
+		ReadTimeout:  5 * time.Second,  // request body okuma süresi
+		WriteTimeout: 10 * time.Second, // response yazma süresi
+		IdleTimeout:  60 * time.Second,
 	}
 
 	// start the HTTP server with graceful shutdown
