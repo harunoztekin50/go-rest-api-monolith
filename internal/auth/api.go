@@ -35,11 +35,10 @@ func loginWithEmail(service Service, logger log.Logger) routing.Handler {
 		}{token})
 	}
 }
-
 func loginWithAnonymus(service Service, logger log.Logger) routing.Handler {
 	return func(c *routing.Context) error {
 		var req struct {
-			deviceKey string `json:"device_key"`
+			DeviceKey string `json:"device_key"`
 		}
 
 		if err := c.Read(&req); err != nil {
@@ -47,8 +46,14 @@ func loginWithAnonymus(service Service, logger log.Logger) routing.Handler {
 			return errors.BadRequest("")
 		}
 
-		token, err := service.loginWithAnonymus(c.Request.Context(), req.deviceKey)
+		if req.DeviceKey == "" {
+			logger.With(c.Request.Context()).Errorf("device_key boş")
+			return errors.BadRequest("device_key boş olamaz")
+		}
+
+		token, err := service.loginWithAnonymus(c.Request.Context(), req.DeviceKey)
 		if err != nil {
+			logger.With(c.Request.Context()).Errorf("login failed: %v", err)
 			return err
 		}
 		return c.Write(struct {

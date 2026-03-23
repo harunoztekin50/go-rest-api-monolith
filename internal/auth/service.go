@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"database/sql"
+	stderr "errors"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -30,11 +32,12 @@ type service struct {
 	signingKey      string
 	tokenExpiration int
 	logger          log.Logger
+	repository      AuthRepository
 }
 
 // NewService creates a new authentication service.
-func NewService(signingKey string, tokenExpiration int, logger log.Logger) Service {
-	return service{signingKey, tokenExpiration, logger}
+func NewService(signingKey string, tokenExpiration int, logger log.Logger, rerepository AuthRepository) Service {
+	return service{signingKey, tokenExpiration, logger, rerepository}
 }
 
 // Login authenticates a user and generates a JWT token if authentication succeeds.
@@ -64,7 +67,26 @@ func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (strin
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	return "", errors.Unauthorized("")
+	user, err := s.repository.GetUserByDeviceKey(ctx, deviceKey)
+
+	if err != nil && stderr.Is(err, sql.ErrNoRows) {
+		user, err = s.repository.CreateAnnonymusUser(ctx, deviceKey)
+		if err != nil {
+			s.logger.With(ctx).Errorf("user oluşturulamadı, device key: %s, err: %v", deviceKey, err)
+			return "", errors.InternalServerError("")
+		}
+	} else if err != nil {
+		s.logger.With(ctx).Errorf("DB hatası, deviceKey: %s, err: %v", deviceKey, err)
+		return "", errors.InternalServerError("")
+	}
+
+	token, err := s.generateJWT(user)
+	if err != nil {
+		s.logger.With(ctx).Errorf("JWT üretilemedi, userID: %s, err: %v", user.ID, err)
+		return "", errors.InternalServerError("")
+	}
+	return token, nil
+
 }
 
 // generateJWT generates a JWT that encodes an identity.

@@ -78,6 +78,8 @@ func main() {
 func buildHandler(logger log.Logger, db *dbcontext.DB, cfg *config.Config) http.Handler {
 	router := routing.New()
 
+	authRepo := auth.NewsRepoAuth(db, logger)
+
 	router.Use(
 		accesslog.Handler(logger),
 		errors.Handler(logger),
@@ -97,7 +99,7 @@ func buildHandler(logger log.Logger, db *dbcontext.DB, cfg *config.Config) http.
 	)
 
 	auth.RegisterHandlers(rg.Group(""),
-		auth.NewService(cfg.JWTSigningKey, cfg.JWTExpiration, logger),
+		auth.NewService(cfg.JWTSigningKey, cfg.JWTExpiration, logger, authRepo),
 		logger,
 	)
 
