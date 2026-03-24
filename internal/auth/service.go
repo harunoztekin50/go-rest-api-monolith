@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	stderr "errors"
+	"fmt"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -16,8 +18,8 @@ import (
 type Service interface {
 	// authenticate authenticates a user using username and password.
 	// It returns a JWT token if authentication succeeds. Otherwise, an error is returned.
-	loginWithEmail(ctx context.Context, username, password string) (string, error)
-	loginWithAnonymus(ctx context.Context, deviceKey string) (string, error)
+	loginWithEmail(ctx context.Context, username, password string) (entity.AuthTokens, error)
+	loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error)
 }
 
 // Identity represents an authenticated user identity.
@@ -42,7 +44,7 @@ func NewService(signingKey string, tokenExpiration int, logger log.Logger, rerep
 
 // Login authenticates a user and generates a JWT token if authentication succeeds.
 // Otherwise, an error is returned.
-func (s service) loginWithEmail(ctx context.Context, username, password string) (string, error) {
+func (s service) loginWithEmail(ctx context.Context, username, password string) (entity.AuthTokens, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -56,13 +58,25 @@ func (s service) loginWithEmail(ctx context.Context, username, password string) 
 		user = entity.User{ID: "100", Name: "demo"}
 	}
 
-	return s.generateJWT(user)
+	accessToken, err := s.generateJWT(user)
+
+	if err != nil {
+		return entity.AuthTokens{}, nil
+	}
+
+	return entity.AuthTokens{
+		RefreshToken: "",
+		AccessToken:  accessToken,
+	}, nil
+
 }
 
-func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (string, error) {
+func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error) {
 	// sistemde kulanıcı var mı
 	// JWt token hazrılanır kulanıcı için
 	// JWT return edilir
+
+	var authToken entity.AuthTokens
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -73,20 +87,33 @@ func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (strin
 		user, err = s.repository.CreateAnnonymusUser(ctx, deviceKey)
 		if err != nil {
 			s.logger.With(ctx).Errorf("user oluşturulamadı, device key: %s, err: %v", deviceKey, err)
-			return "", errors.InternalServerError("")
+			return authToken, errors.InternalServerError("")
 		}
 	} else if err != nil {
 		s.logger.With(ctx).Errorf("DB hatası, deviceKey: %s, err: %v", deviceKey, err)
-		return "", errors.InternalServerError("")
+		return authToken, errors.InternalServerError("")
 	}
 
-	token, err := s.generateJWT(user)
+	accessToken, err := s.generateJWT(user)
 	if err != nil {
 		s.logger.With(ctx).Errorf("JWT üretilemedi, userID: %s, err: %v", user.ID, err)
-		return "", errors.InternalServerError("")
+		return authToken, errors.InternalServerError("")
 	}
-	return token, nil
 
+	refreshToken := entity.GenerateID()
+	hash := sha256.Sum256([]byte(refreshToken))
+	refreshTokenHashed := fmt.Sprintf("%x", hash)
+
+	err = s.repository.CreateNewRefreshToken(ctx, deviceKey, user.ID, refreshTokenHashed)
+
+	if err != nil {
+		return authToken, err
+	}
+
+	authToken.AccessToken = accessToken
+	authToken.RefreshToken = refreshToken
+
+	return authToken, nil
 }
 
 // generateJWT generates a JWT that encodes an identity.

@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"net/http"
+
 	routing "github.com/go-ozzo/ozzo-routing/v2"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
@@ -26,13 +28,12 @@ func loginWithEmail(service Service, logger log.Logger) routing.Handler {
 			return errors.BadRequest("")
 		}
 
-		token, err := service.loginWithEmail(c.Request.Context(), req.Username, req.Password)
+		authTokens, err := service.loginWithEmail(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			return err
 		}
-		return c.Write(struct {
-			Token string `json:"token"`
-		}{token})
+		return c.WriteWithStatus(authTokens, http.StatusOK)
+
 	}
 }
 func loginWithAnonymus(service Service, logger log.Logger) routing.Handler {
@@ -51,14 +52,12 @@ func loginWithAnonymus(service Service, logger log.Logger) routing.Handler {
 			return errors.BadRequest("device_key boş olamaz")
 		}
 
-		token, err := service.loginWithAnonymus(c.Request.Context(), req.DeviceKey)
+		authToken, err := service.loginWithAnonymus(c.Request.Context(), req.DeviceKey)
 		if err != nil {
 			logger.With(c.Request.Context()).Errorf("login failed: %v", err)
 			return err
 		}
-		return c.Write(struct {
-			Token string `json:"token"`
-		}{token})
+		return c.WriteWithStatus(authToken, http.StatusOK)
 	}
 
 }

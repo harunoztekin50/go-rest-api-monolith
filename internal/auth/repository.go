@@ -15,6 +15,7 @@ import (
 type AuthRepository interface {
 	GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error)
 	CreateAnnonymusUser(ctx context.Context, deviceKey string) (*entity.User, error)
+	CreateNewRefreshToken(ctx context.Context, deviceKey, userID, hashedValue string) error
 }
 
 type repository struct {
@@ -105,4 +106,49 @@ func (r *repository) CreateAnnonymusUser(ctx context.Context, deviceKey string) 
 		CreatedAt:  currentTime,
 		UpdatedAt:  currentTime,
 	}, nil
+}
+
+func (r *repository) CreateNewRefreshToken(ctx context.Context, deviceKey, userID, hashedValue string) error {
+
+	tx, err := r.db.DB().WithContext(ctx).Begin()
+
+	if err != nil {
+		return err
+	}
+
+	_, err1 := tx.Update("refresh_token",
+		dbx.Params{"revoked_at": time.Now()},
+		dbx.HashExp{"device_key": deviceKey, "user_id": userID},
+	).Execute()
+
+	token := entity.RefreshToken{
+		ID:          entity.GenerateID(),
+		DeviceKey:   deviceKey,
+		UserID:      userID,
+		HashedValue: hashedValue,
+		CreatedAt:   time.Now(),
+		ExpiresAt:   time.Now().Add(time.Hour * 24 * 7),
+	}
+
+	_, err2 := tx.Insert("refresh_token", dbx.Params{
+		"id":           token.ID,
+		"device_key":   token.DeviceKey,
+		"user_id":      token.UserID,
+		"hashed_value": token.HashedValue,
+		"created_at":   token.CreatedAt,
+		"expires_at":   token.ExpiresAt,
+	}).Execute()
+
+	if err1 != nil || err2 != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			r.loger.Errorf("rollback hatası: %v", rbErr)
+		}
+		if err1 != nil {
+			return err1
+		}
+		return err2
+	}
+
+	return tx.Commit()
+
 }
