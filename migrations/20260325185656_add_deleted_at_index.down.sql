@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS user_deleted_at_idx;

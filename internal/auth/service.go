@@ -20,6 +20,7 @@ type Service interface {
 	// It returns a JWT token if authentication succeeds. Otherwise, an error is returned.
 	loginWithEmail(ctx context.Context, username, password string) (entity.AuthTokens, error)
 	loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error)
+	RefreshToken(ctx context.Context, deviceKey, refreshToken string) (entity.AuthTokens, error)
 }
 
 // Identity represents an authenticated user identity.
@@ -61,9 +62,8 @@ func (s service) loginWithEmail(ctx context.Context, username, password string) 
 	accessToken, err := s.generateJWT(user)
 
 	if err != nil {
-		return entity.AuthTokens{}, nil
+		return entity.AuthTokens{}, errors.InternalServerError("TOKEN_GENERATION_FAILED")
 	}
-
 	return entity.AuthTokens{
 		RefreshToken: "",
 		AccessToken:  accessToken,
@@ -86,34 +86,71 @@ func (s service) loginWithAnonymus(ctx context.Context, deviceKey string) (entit
 	if err != nil && stderr.Is(err, sql.ErrNoRows) {
 		user, err = s.repository.CreateAnnonymusUser(ctx, deviceKey)
 		if err != nil {
-			s.logger.With(ctx).Errorf("user oluşturulamadı, device key: %s, err: %v", deviceKey, err)
-			return authToken, errors.InternalServerError("")
+			s.logger.With(ctx).Errorf("kullanıcı oluşturulamadı, deviceKey: %s, err: %v", deviceKey, err)
+			return authToken, errors.InternalServerError("USER_CREATE_FAILED")
 		}
 	} else if err != nil {
-		s.logger.With(ctx).Errorf("DB hatası, deviceKey: %s, err: %v", deviceKey, err)
+		return authToken, errors.InternalServerError("DB_ERROR")
+	}
+
+	return s.createAuthToken(ctx, user)
+}
+
+func (s service) CreateHashToken(refreshToken string) string {
+	hash := sha256.Sum256([]byte(refreshToken))
+	refreshTokenHashed := fmt.Sprintf("%x", hash)
+	return refreshTokenHashed
+}
+
+func (s service) RefreshToken(ctx context.Context, deviceKey, refreshToken string) (entity.AuthTokens, error) {
+
+	var authToken entity.AuthTokens
+
+	hashedRefeshToken := s.CreateHashToken(refreshToken)
+
+	userID, err := s.repository.ValidateRefreshToken(ctx, deviceKey, hashedRefeshToken)
+
+	if stderr.Is(err, sql.ErrNoRows) {
+		return authToken, errors.Unauthorized("")
+	} else if err != nil {
 		return authToken, errors.InternalServerError("")
 	}
+
+	user, err := s.repository.GetUserByUserID(ctx, userID)
+
+	if err != nil {
+		s.logger.With(ctx).Errorf("kullanıcı bulunamadı, userID: %s, err: %v", userID, err)
+		return authToken, errors.InternalServerError("")
+	}
+
+	return s.createAuthToken(ctx, user)
+
+}
+
+func (s service) createAuthToken(ctx context.Context, user *entity.User) (entity.AuthTokens, error) {
+
+	var authToken entity.AuthTokens
 
 	accessToken, err := s.generateJWT(user)
 	if err != nil {
 		s.logger.With(ctx).Errorf("JWT üretilemedi, userID: %s, err: %v", user.ID, err)
-		return authToken, errors.InternalServerError("")
+		return authToken, errors.InternalServerError("TOKEN_GENERATION_FAILED")
 	}
 
-	refreshToken := entity.GenerateID()
-	hash := sha256.Sum256([]byte(refreshToken))
-	refreshTokenHashed := fmt.Sprintf("%x", hash)
+	refreshTokenCreate := entity.GenerateID()
+	refreshTokenHashed := s.CreateHashToken(refreshTokenCreate)
 
-	err = s.repository.CreateNewRefreshToken(ctx, deviceKey, user.ID, refreshTokenHashed)
+	err = s.repository.CreateNewRefreshToken(ctx, user.AuthID, user.ID, refreshTokenHashed)
 
 	if err != nil {
-		return authToken, err
+		s.logger.With(ctx).Errorf("refresh token oluşturulamadı, userID: %s, err: %v", user.ID, err)
+		return authToken, errors.InternalServerError("")
 	}
-
 	authToken.AccessToken = accessToken
-	authToken.RefreshToken = refreshToken
+	authToken.RefreshToken = refreshTokenCreate
 
 	return authToken, nil
+
 }
 
 // generateJWT generates a JWT that encodes an identity.

@@ -14,8 +14,10 @@ import (
 
 type AuthRepository interface {
 	GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error)
+	GetUserByUserID(ctx context.Context, deviceKey string) (*entity.User, error)
 	CreateAnnonymusUser(ctx context.Context, deviceKey string) (*entity.User, error)
 	CreateNewRefreshToken(ctx context.Context, deviceKey, userID, hashedValue string) error
+	ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error)
 }
 
 type repository struct {
@@ -28,18 +30,6 @@ func NewsRepoAuth(db *dbcontext.DB, logger log.Logger) AuthRepository {
 		db:    db,
 		loger: logger,
 	}
-}
-
-func (r *repository) GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error) {
-
-	var user entity.User
-
-	err := r.db.DB().WithContext(ctx).Select("id", "name").From("public.users").Where(dbx.HashExp{
-		"auth_method": entity.AuthMethodAnonymous,
-		"auth_id":     deviceKey,
-	}).One(&user)
-
-	return &user, err
 }
 
 func (r *repository) CreateAnnonymusUser(ctx context.Context, deviceKey string) (*entity.User, error) {
@@ -151,4 +141,48 @@ func (r *repository) CreateNewRefreshToken(ctx context.Context, deviceKey, userI
 
 	return tx.Commit()
 
+}
+
+func (r repository) ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error) {
+
+	var userID string
+
+	err := r.db.DB().WithContext(ctx).
+		Select("user_id").
+		From("refresh_token").
+		Where(dbx.NewExp(
+			"device_key = {:device_key} AND hashed_value = {:hashed_value} AND revoked_at IS NULL AND expires_at > {:now}",
+			dbx.Params{
+				"device_key":   deviceKey,
+				"hashed_value": hashedValue,
+				"now":          time.Now(),
+			},
+		)).Row(&userID)
+
+	return userID, err
+}
+
+func (r repository) GetUserByUserID(ctx context.Context, userID string) (*entity.User, error) {
+
+	var user entity.User
+
+	err := r.db.DB().WithContext(ctx).Select("id", "name", "auth_id").From("public.users").Where(dbx.HashExp{
+		"id":         userID,
+		"deleted_at": nil,
+	}).One(&user)
+
+	return &user, err
+}
+
+func (r *repository) GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error) {
+
+	var user entity.User
+
+	err := r.db.DB().WithContext(ctx).Select("id", "name", "auth_id").From("public.users").Where(dbx.HashExp{
+		"auth_method": entity.AuthMethodAnonymous,
+		"auth_id":     deviceKey,
+		"deleted_at":  nil,
+	}).One(&user)
+
+	return &user, err
 }
