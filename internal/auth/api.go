@@ -9,7 +9,7 @@ import (
 )
 
 // RegisterHandlers registers handlers for different HTTP requests.
-func RegisterHandlers(rg *routing.RouteGroup, service Service, logger log.Logger) {
+func RegisterHandlers(rg *routing.RouteGroup, service Service, authHandler routing.Handler, logger log.Logger) {
 	r := &resource{
 		service: service,
 		logger:  logger,
@@ -18,6 +18,10 @@ func RegisterHandlers(rg *routing.RouteGroup, service Service, logger log.Logger
 	rg.Post("/auth/login/email-pass", r.loginWithEmail)
 	rg.Post("/auth/login/anonymus", r.loginWithAnonymus)
 	rg.Post("/auth/refresh", r.refreshTokens)
+
+	rg.Use(authHandler)
+
+	rg.Get("/auth/user", r.getUser)
 
 }
 
@@ -91,4 +95,8 @@ func (r *resource) refreshTokens(c *routing.Context) error {
 		return err
 	}
 	return c.WriteWithStatus(authToken, http.StatusOK)
+}
+
+func (r *resource) getUser(c *routing.Context) error {
+	return c.WriteWithStatus(CurrentUser(c.Request.Context()), http.StatusOK)
 }

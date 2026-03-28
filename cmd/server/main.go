@@ -100,6 +100,7 @@ func buildHandler(logger log.Logger, db *dbcontext.DB, cfg *config.Config) http.
 
 	auth.RegisterHandlers(rg.Group(""),
 		auth.NewService(cfg.JWTSigningKey, cfg.JWTExpiration, logger, authRepo),
+		authHandler,
 		logger,
 	)
 

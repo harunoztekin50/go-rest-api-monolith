@@ -38,6 +38,8 @@ type service struct {
 	repository      AuthRepository
 }
 
+// GetUserByDeviceKey implements [Service].
+
 // NewService creates a new authentication service.
 func NewService(signingKey string, tokenExpiration int, logger log.Logger, rerepository AuthRepository) Service {
 	return service{signingKey, tokenExpiration, logger, rerepository}
