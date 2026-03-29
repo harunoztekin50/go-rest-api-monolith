@@ -21,15 +21,10 @@ type Service interface {
 	loginWithEmail(ctx context.Context, username, password string) (entity.AuthTokens, error)
 	loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error)
 	RefreshToken(ctx context.Context, deviceKey, refreshToken string) (entity.AuthTokens, error)
+	GetUser(ctx context.Context) (entity.User, error)
 }
 
 // Identity represents an authenticated user identity.
-type Identity interface {
-	// GetID returns the user ID.
-	GetID() string
-	// GetName returns the user name.
-	GetName() string
-}
 
 type service struct {
 	signingKey      string
@@ -153,6 +148,15 @@ func (s service) createAuthToken(ctx context.Context, user *entity.User) (entity
 
 	return authToken, nil
 
+}
+
+func (s service) GetUser(ctx context.Context) (entity.User, error) {
+	indenty := CurrentUser(ctx)
+
+	return entity.User{
+		ID:   indenty.GetID(),
+		Name: indenty.GetName(),
+	}, nil
 }
 
 // generateJWT generates a JWT that encodes an identity.

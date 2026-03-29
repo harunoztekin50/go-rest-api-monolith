@@ -2,12 +2,13 @@ package auth
 
 import (
 	"context"
+	"net/http"
+
 	"github.com/dgrijalva/jwt-go"
 	routing "github.com/go-ozzo/ozzo-routing/v2"
 	"github.com/go-ozzo/ozzo-routing/v2/auth"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/entity"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
-	"net/http"
 )
 
 // Handler returns a JWT-based authentication middleware.
@@ -24,6 +25,13 @@ func handleToken(c *routing.Context, token *jwt.Token) error {
 	)
 	c.Request = c.Request.WithContext(ctx)
 	return nil
+}
+
+type Identity interface {
+	// GetID returns the user ID.
+	GetID() string
+	// GetName returns the user name.
+	GetName() string
 }
 
 type contextKey int

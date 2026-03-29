@@ -96,7 +96,7 @@ func (r *resource) refreshTokens(c *routing.Context) error {
 	}
 	return c.WriteWithStatus(authToken, http.StatusOK)
 }
-
 func (r *resource) getUser(c *routing.Context) error {
-	return c.WriteWithStatus(CurrentUser(c.Request.Context()), http.StatusOK)
+	user := CurrentUser(c.Request.Context())
+	return c.WriteWithStatus(user, http.StatusOK)
 }
