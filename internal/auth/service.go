@@ -21,7 +21,7 @@ type Service interface {
 	loginWithEmail(ctx context.Context, username, password string) (entity.AuthTokens, error)
 	loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error)
 	RefreshToken(ctx context.Context, deviceKey, refreshToken string) (entity.AuthTokens, error)
-	GetUser(ctx context.Context) (entity.User, error)
+	GetUser(ctx context.Context, userID string) (entity.User, error)
 }
 
 // Identity represents an authenticated user identity.
@@ -150,13 +150,15 @@ func (s service) createAuthToken(ctx context.Context, user *entity.User) (entity
 
 }
 
-func (s service) GetUser(ctx context.Context) (entity.User, error) {
-	indenty := CurrentUser(ctx)
-
-	return entity.User{
-		ID:   indenty.GetID(),
-		Name: indenty.GetName(),
-	}, nil
+func (s service) GetUser(ctx context.Context, userID string) (entity.User, error) {
+	user, err := s.repository.GetUserByUserID(ctx, userID)
+	if err != nil {
+		if stderr.Is(err, sql.ErrNoRows) {
+			return entity.User{}, errors.NotFound("user not found")
+		}
+		return entity.User{}, errors.InternalServerError("")
+	}
+	return *user, nil
 }
 
 // generateJWT generates a JWT that encodes an identity.

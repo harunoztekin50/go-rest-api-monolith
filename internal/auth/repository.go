@@ -14,7 +14,7 @@ import (
 
 type AuthRepository interface {
 	GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error)
-	GetUserByUserID(ctx context.Context, deviceKey string) (*entity.User, error)
+	GetUserByUserID(ctx context.Context, userID string) (*entity.User, error)
 	CreateAnnonymusUser(ctx context.Context, deviceKey string) (*entity.User, error)
 	CreateNewRefreshToken(ctx context.Context, deviceKey, userID, hashedValue string) error
 	ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error)
@@ -71,7 +71,7 @@ func (r *repository) CreateAnnonymusUser(ctx context.Context, deviceKey string) 
 		"credits":     3,
 		"created_at":  currentTime,
 		"updated_at":  currentTime,
-	}).Prepare().Execute()
+	}).Execute()
 
 	if err != nil {
 		return nil, err
@@ -143,7 +143,7 @@ func (r *repository) CreateNewRefreshToken(ctx context.Context, deviceKey, userI
 
 }
 
-func (r repository) ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error) {
+func (r *repository) ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error) {
 
 	var userID string
 
@@ -162,18 +162,6 @@ func (r repository) ValidateRefreshToken(ctx context.Context, deviceKey, hashedV
 	return userID, err
 }
 
-func (r repository) GetUserByUserID(ctx context.Context, userID string) (*entity.User, error) {
-
-	var user entity.User
-
-	err := r.db.DB().WithContext(ctx).Select("id", "name", "auth_id").From("public.users").Where(dbx.HashExp{
-		"id":         userID,
-		"deleted_at": nil,
-	}).One(&user)
-
-	return &user, err
-}
-
 func (r *repository) GetUserByDeviceKey(ctx context.Context, deviceKey string) (*entity.User, error) {
 
 	var user entity.User
@@ -185,4 +173,55 @@ func (r *repository) GetUserByDeviceKey(ctx context.Context, deviceKey string) (
 	}).One(&user)
 
 	return &user, err
+}
+
+func (r *repository) GetUserByUserID(ctx context.Context, userID string) (*entity.User, error) {
+
+	var row struct {
+		entity.User
+		SubscriptionPlan      *entity.SubscriptionPlan   `db:"subscription_plan"`
+		SubscriptionPeriod    *entity.SubscriptionPeriod `db:"subscription_period"`
+		SubscriptionType      *entity.SubscriptionType   `db:"subscription_type"`
+		SubscriptionStatus    *entity.SubscriptionStatus `db:"subscription_status"`
+		SubscriptionExpiresAt *time.Time                 `db:"subscription_expires_at"`
+	}
+
+	err := r.db.DB().WithContext(ctx).Select(
+		"id",
+		"name",
+		"customer_id",
+		"auth_id",
+		"auth_method",
+		"is_new_user",
+		"fcm_token",
+		"CASE WHEN credits_expires_at IS NULL THEN 3 WHEN credits_expires_at < NOW() THEN 0 ELSE credits END AS credits",
+		"credits_expires_at",
+		"CASE WHEN subscription_status = 'active' AND (subscription_expires_at IS NULL OR subscription_expires_at > NOW()) THEN subscription_plan ELSE NULL END AS subscription_plan",
+		"CASE WHEN subscription_status = 'active' AND (subscription_expires_at IS NULL OR subscription_expires_at > NOW()) THEN subscription_period ELSE NULL END AS subscription_period",
+		"CASE WHEN subscription_status = 'active' AND (subscription_expires_at IS NULL OR subscription_expires_at > NOW()) THEN subscription_type ELSE NULL END AS subscription_type",
+		"subscription_status",
+		"subscription_expires_at",
+	).From("public.users").Where(dbx.HashExp{
+		"id":         userID,
+		"deleted_at": nil,
+	}).One(&row)
+
+	if err != nil {
+		return nil, err
+	}
+
+	user := row.User
+	if row.SubscriptionStatus != nil &&
+		*row.SubscriptionStatus == entity.SubscriptionStatusActive &&
+		row.SubscriptionPlan != nil {
+		user.Subscription = &entity.Subscription{
+			Plan:      *row.SubscriptionPlan,
+			Period:    *row.SubscriptionPeriod,
+			Type:      *row.SubscriptionType,
+			Status:    *row.SubscriptionStatus,
+			ExpiresAt: row.SubscriptionExpiresAt,
+		}
+	}
+
+	return &user, nil
 }
