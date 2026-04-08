@@ -18,6 +18,8 @@ type AuthRepository interface {
 	CreateAnnonymusUser(ctx context.Context, deviceKey string) (*entity.User, error)
 	CreateNewRefreshToken(ctx context.Context, deviceKey, userID, hashedValue string) error
 	ValidateRefreshToken(ctx context.Context, deviceKey, hashedValue string) (string, error)
+	LogOutWithDevice(ctx context.Context, deviceKey, userID string) error
+	LogOutAll(ctx context.Context, userID string) error
 }
 
 type repository struct {
@@ -224,4 +226,34 @@ func (r *repository) GetUserByUserID(ctx context.Context, userID string) (*entit
 	}
 
 	return &user, nil
+}
+
+func (r *repository) LogOutWithDevice(ctx context.Context, deviceKey, userID string) error {
+	_, err := r.db.DB().WithContext(ctx).
+		NewQuery(`
+            UPDATE refresh_token
+            SET revoked_at = {:now}
+            WHERE device_key = {:device_key}
+              AND user_id = {:user_id}
+              AND revoked_at IS NULL
+        `).Bind(dbx.Params{
+		"now":        time.Now(),
+		"device_key": deviceKey,
+		"user_id":    userID,
+	}).Execute()
+	return err
+}
+
+func (r *repository) LogOutAll(ctx context.Context, userID string) error {
+	_, err := r.db.DB().WithContext(ctx).
+		NewQuery(`
+            UPDATE refresh_token
+            SET revoked_at = {:now}
+            WHERE user_id = {:user_id}
+              AND revoked_at IS NULL
+        `).Bind(dbx.Params{
+		"now":     time.Now(),
+		"user_id": userID,
+	}).Execute()
+	return err
 }

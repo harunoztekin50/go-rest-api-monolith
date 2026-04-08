@@ -22,6 +22,8 @@ type Service interface {
 	loginWithAnonymus(ctx context.Context, deviceKey string) (entity.AuthTokens, error)
 	RefreshToken(ctx context.Context, deviceKey, refreshToken string) (entity.AuthTokens, error)
 	GetUser(ctx context.Context, userID string) (entity.User, error)
+	LogOutWithDevice(ctx context.Context, deviceKey, userID string) error
+	LogOutWithUserID(ctx context.Context, userID string) error
 }
 
 // Identity represents an authenticated user identity.
@@ -64,7 +66,7 @@ func (s service) loginWithEmail(ctx context.Context, username, password string) 
 	return entity.AuthTokens{
 		RefreshToken: "",
 		AccessToken:  accessToken,
-	}, nil
+	}, err
 
 }
 
@@ -146,7 +148,7 @@ func (s service) createAuthToken(ctx context.Context, user *entity.User) (entity
 	authToken.AccessToken = accessToken
 	authToken.RefreshToken = refreshTokenCreate
 
-	return authToken, nil
+	return authToken, err
 
 }
 
@@ -158,7 +160,46 @@ func (s service) GetUser(ctx context.Context, userID string) (entity.User, error
 		}
 		return entity.User{}, errors.InternalServerError("")
 	}
-	return *user, nil
+	return *user, err
+}
+func (s service) LogOutWithDevice(ctx context.Context, deviceKey, userID string) error {
+	err := s.repository.LogOutWithDevice(ctx, deviceKey, userID)
+	if err != nil {
+		switch {
+		case stderr.Is(err, context.DeadlineExceeded):
+			s.logger.With(ctx).Errorf("logout timeout: userID=%s deviceKey=%s err=%v", userID, deviceKey, err)
+			return errors.InternalServerError("")
+		case stderr.Is(err, context.Canceled):
+			s.logger.With(ctx).Errorf("logout canceled: userID=%s deviceKey=%s", userID, deviceKey)
+			return errors.InternalServerError("")
+		default:
+			s.logger.With(ctx).Errorf("logout failed: userID=%s deviceKey=%s err=%v", userID, deviceKey, err)
+			return errors.InternalServerError("")
+		}
+	}
+
+	s.logger.With(ctx).Infof("logout success: userID=%s deviceKey=%s", userID, deviceKey)
+	return err
+}
+
+func (s service) LogOutWithUserID(ctx context.Context, userID string) error {
+	err := s.repository.LogOutAll(ctx, userID)
+	if err != nil {
+		switch {
+		case stderr.Is(err, context.DeadlineExceeded):
+			s.logger.With(ctx).Errorf("logout-all timeout: userID=%s err=%v", userID, err)
+			return errors.InternalServerError("")
+		case stderr.Is(err, context.Canceled):
+			s.logger.With(ctx).Errorf("logout-all canceled: userID=%s", userID)
+			return errors.InternalServerError("")
+		default:
+			s.logger.With(ctx).Errorf("logout-all failed: userID=%s err=%v", userID, err)
+			return errors.InternalServerError("")
+		}
+	}
+
+	s.logger.With(ctx).Infof("logout-all success: userID=%s", userID)
+	return err
 }
 
 // generateJWT generates a JWT that encodes an identity.

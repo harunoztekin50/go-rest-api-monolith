@@ -22,7 +22,8 @@ func RegisterHandlers(rg *routing.RouteGroup, service Service, authHandler routi
 	rg.Use(authHandler)
 
 	rg.Get("/auth/user", r.getUser)
-
+	rg.Post("/auth/logout", r.logOutDevice)
+	rg.Post("/auth/logout-all", r.logOutAllDevice)
 }
 
 type resource struct {
@@ -96,6 +97,40 @@ func (r *resource) refreshTokens(c *routing.Context) error {
 	}
 	return c.WriteWithStatus(authToken, http.StatusOK)
 }
+
+func (r *resource) logOutDevice(c *routing.Context) error {
+	var req struct {
+		DeviceKey string `json:"device_key"`
+	}
+
+	if err := c.Read(&req); err != nil {
+		r.logger.With(c.Request.Context()).Errorf("invalid request: %v", err)
+		return errors.BadRequest("")
+	}
+
+	if req.DeviceKey == "" {
+		return errors.BadRequest("device_key is required")
+	}
+
+	userID := CurrentUser(c.Request.Context()).GetID()
+
+	if err := r.service.LogOutWithDevice(c.Request.Context(), req.DeviceKey, userID); err != nil {
+		return err
+	}
+
+	return c.WriteWithStatus(map[string]string{"message": "logged out"}, http.StatusOK)
+}
+
+func (r *resource) logOutAllDevice(c *routing.Context) error {
+	userID := CurrentUser(c.Request.Context()).GetID()
+
+	if err := r.service.LogOutWithUserID(c.Request.Context(), userID); err != nil {
+		return err
+	}
+
+	return c.WriteWithStatus(map[string]string{"message": "logged out from all devices"}, http.StatusOK)
+}
+
 func (r *resource) getUser(c *routing.Context) error {
 
 	userID := CurrentUser(c.Request.Context()).GetID()
