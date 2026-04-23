@@ -16,33 +16,55 @@ const (
 
 // Config represents an application configuration.
 type Config struct {
-	// the server port. Defaults to 8080
-	ServerPort int `yaml:"server_port" env:"SERVER_PORT"`
-	// the data source name (DSN) for connecting to the database. required.
-	DSN string `yaml:"dsn" env:"DSN,secret"`
-	// JWT signing key. required.
+	ServerPort    int    `yaml:"server_port" env:"SERVER_PORT"`
+	DSN           string `yaml:"dsn" env:"DSN,secret"`
 	JWTSigningKey string `yaml:"jwt_signing_key" env:"JWT_SIGNING_KEY,secret"`
-	// JWT expiration in hours. Defaults to 72 hours (3 days)
-	JWTExpiration int `yaml:"jwt_expiration" env:"JWT_EXPIRATION"`
+	JWTExpiration int    `yaml:"jwt_expiration" env:"JWT_EXPIRATION"`
+
+	Storage StorageConfig `yaml:"storage"`
+}
+
+type StorageConfig struct {
+	Provider        string `yaml:"provider" env:"STORAGE_PROVIDER"` // "local" | "r2"
+	Bucket          string `yaml:"bucket" env:"STORAGE_BUCKET"`
+	AccountID       string `yaml:"account_id" env:"STORAGE_ACCOUNT_ID"`
+	Prefix          string `yaml:"prefix" env:"STORAGE_PREFIX"`
+	AccessKeyID     string `yaml:"-" env:"STORAGE_ACCESS_KEY_ID,secret"`
+	SecretAccessKey string `yaml:"-" env:"STORAGE_SECRET_ACCESS_KEY,secret"`
 }
 
 // Validate validates the application configuration.
 func (c Config) Validate() error {
-	return validation.ValidateStruct(&c,
+	err := validation.ValidateStruct(&c,
 		validation.Field(&c.DSN, validation.Required),
 		validation.Field(&c.JWTSigningKey, validation.Required),
 	)
+	if err != nil {
+		return err
+	}
+
+	if c.Storage.Provider == "r2" {
+		return validation.ValidateStruct(&c.Storage,
+			validation.Field(&c.Storage.Bucket, validation.Required),
+			validation.Field(&c.Storage.AccountID, validation.Required),
+			validation.Field(&c.Storage.AccessKeyID, validation.Required),
+			validation.Field(&c.Storage.SecretAccessKey, validation.Required),
+		)
+	}
+
+	return nil
 }
 
-// Load returns an application configuration which is populated from the given configuration file and environment variables.
+// Load returns an application configuration populated from YAML and env.
 func Load(file string, logger log.Logger) (*Config, error) {
-	// default config
 	c := Config{
 		ServerPort:    defaultServerPort,
 		JWTExpiration: defaultJWTExpirationmin,
+		Storage: StorageConfig{
+			Provider: "local",
+		},
 	}
 
-	// load from YAML config file
 	bytes, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -51,15 +73,22 @@ func Load(file string, logger log.Logger) (*Config, error) {
 		return nil, err
 	}
 
-	// load from environment variables prefixed with "APP_"
 	if err = env.New("APP_", logger.Infof).Load(&c); err != nil {
 		return nil, err
 	}
 
-	// validation
+	// go-env nested struct alanlarını beklediğimiz gibi doldurmadığı için
+	// secret alanları manuel alıyoruz.
+	if v := os.Getenv("APP_STORAGE_ACCESS_KEY_ID"); v != "" {
+		c.Storage.AccessKeyID = v
+	}
+	if v := os.Getenv("APP_STORAGE_SECRET_ACCESS_KEY"); v != "" {
+		c.Storage.SecretAccessKey = v
+	}
+
 	if err = c.Validate(); err != nil {
 		return nil, err
 	}
 
-	return &c, err
+	return &c, nil
 }

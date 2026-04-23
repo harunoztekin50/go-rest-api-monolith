@@ -2,11 +2,12 @@
 package accesslog
 
 import (
+	"net/http"
+	"time"
+
 	routing "github.com/go-ozzo/ozzo-routing/v2"
 	"github.com/go-ozzo/ozzo-routing/v2/access"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
-	"net/http"
-	"time"
 )
 
 // Handler returns a middleware that records an access log message for every HTTP request being processed.

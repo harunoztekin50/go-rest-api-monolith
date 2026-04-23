@@ -1,3 +1,8 @@
 dsn: "postgres://postgres:postgres@localhost:5432/go_restful?sslmode=disable"
-jwt_signing_key: "rFg1nXeDNVJYpe/dKzwUOvcuVKe3NJjOTHZ8PJOuVXA="
 server_port: 8989
+
+storage:
+  provider: "r2"
+  bucket: "my-photos-saglix"
+  account_id: "9987a005b28d7f8808e10116d5af5cda"
+  prefix: "uploads/"

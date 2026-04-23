@@ -17,68 +17,118 @@ import (
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/auth"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/config"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/errors"
+	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/file"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/healthcheck"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/accesslog"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/dbcontext"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
-// Version indicates the current version of the application.
 var Version = "1.0.0"
 
 var flagConfig = flag.String("config", "./config/local.yml", "path to the config file")
 
 func main() {
 	flag.Parse()
-	// create root logger tagged with server version
+
 	logger := log.New().With(nil, "version", Version)
 
-	// load application configurations
-	cfg, err := config.Load(*flagConfig, logger)
-	if err != nil {
-		logger.Errorf("failed to load application configuration: %s", err)
-		os.Exit(-1)
+	// .env yükleme hatası ölümcül değil — production'da env variable'lar
+	// zaten inject edilmiş olur. Sadece uyar, çıkma.
+	if err := godotenv.Load(".env"); err != nil {
+		logger.Infof(".env file not found, relying on environment variables: %v", err)
 	}
 
-	// connect to the database
+	cfg, err := config.Load(*flagConfig, logger)
+	if err != nil {
+		logger.Errorf("failed to load application configuration: %v", err)
+		os.Exit(1)
+	}
+
 	db, err := dbx.MustOpen("postgres", cfg.DSN)
 	if err != nil {
-		logger.Error(err)
-		os.Exit(-1)
+		logger.Errorf("failed to connect to database: %v", err)
+		os.Exit(1)
 	}
 	db.QueryLogFunc = logDBQuery(logger)
 	db.ExecLogFunc = logDBExec(logger)
 	defer func() {
 		if err := db.Close(); err != nil {
-			logger.Error(err)
+			logger.Errorf("failed to close database connection: %v", err)
 		}
 	}()
 
-	// build HTTP server
-	address := fmt.Sprintf(":%v", cfg.ServerPort)
-	hs := &http.Server{
-		Addr:         address,
-		Handler:      buildHandler(logger, dbcontext.New(db), cfg),
-		ReadTimeout:  5 * time.Second,  // request body okuma süresi
-		WriteTimeout: 10 * time.Second, // response yazma süresi
-		IdleTimeout:  60 * time.Second,
+	// ── Storage başlatma main'de yapılır, buildHandler içinde değil ────────
+	// Neden?
+	//   - buildHandler bir constructor'dır; yan etkisi (network bağlantısı,
+	//     panic) olmamalıdır.
+	//   - Hata yönetimi burada açık ve kontrollüdür: panic yerine os.Exit.
+	//   - Test sırasında buildHandler'a mock storage inject edilebilir.
+	fileStorage, err := file.NewR2Storage(context.Background(), cfg.Storage)
+	if err != nil {
+		logger.Errorf("failed to initialize R2 storage: %v", err)
+		os.Exit(1)
 	}
 
-	// start the HTTP server with graceful shutdown
+	// ── WriteTimeout dosya upload için yetersiz ──────────────────────────
+	// Orijinal kod: WriteTimeout: 10 * time.Second
+	// 10 saniye küçük dosyalar için yeterli ama 10 MB dosya + yavaş
+	// bağlantıda timeout yaşanır → "empty reply from server".
+	//
+	// Çözüm seçenekleri:
+	//   A) WriteTimeout'u artır (basit ama tüm endpoint'leri etkiler)
+	//   B) Upload endpoint'i için http.TimeoutHandler kullan (granüler)
+	//   C) ReadTimeout'u artır — body okuma için kritik
+	//
+	// Burada upload gerçeği yansıtacak şekilde artırıyoruz.
+	// Production'da reverse proxy (nginx/caddy) kendi timeout'larını uygular.
+	address := fmt.Sprintf(":%v", cfg.ServerPort)
+	hs := &http.Server{
+		Addr:    address,
+		Handler: buildHandler(logger, dbcontext.New(db), cfg, fileStorage),
+
+		// ReadTimeout: İstemcinin tüm request body'sini göndermesi için süre.
+		// 10 MB @ ~1 MB/s bağlantı = ~10 saniye. 30s güvenli margin.
+		ReadTimeout: 30 * time.Second,
+
+		// WriteTimeout: Response yazma süresi.
+		// Presigned URL üretimi dahil. 30s yeterli.
+		WriteTimeout: 30 * time.Second,
+
+		// ReadHeaderTimeout: Sadece header okuma için ayrı limit.
+		// Slowloris saldırısına karşı koruma.
+		ReadHeaderTimeout: 5 * time.Second,
+
+		IdleTimeout: 60 * time.Second,
+	}
+
 	go routing.GracefulShutdown(hs, 10*time.Second, logger.Infof)
 	logger.Infof("server %v is running at %v", Version, address)
+
 	if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error(err)
-		os.Exit(-1)
+		logger.Errorf("server error: %v", err)
+		os.Exit(1)
 	}
 }
 
-// buildHandler sets up the HTTP routing and builds an HTTP handler.
-func buildHandler(logger log.Logger, db *dbcontext.DB, cfg *config.Config) http.Handler {
+// buildHandler, HTTP routing'i kurar ve handler'ı döner.
+//
+// Bu fonksiyon SAF olmalıdır:
+//   - Yan etki (network bağlantısı, dosya okuma, panic) içermez.
+//   - Tüm bağımlılıklar dışarıdan inject edilir.
+//   - Test sırasında mock bağımlılıklarla çağrılabilir.
+//
+// fileStorage parametresi eklendi: önceki kodda buildHandler içinde
+// storage başlatılıyordu ve hata olunca panic yapılıyordu. Bu yanlış.
+func buildHandler(
+	logger log.Logger,
+	db *dbcontext.DB,
+	cfg *config.Config,
+	fileStorage file.Storage,
+) http.Handler {
 	router := routing.New()
-
-	authRepo := auth.NewsRepoAuth(db, logger)
 
 	router.Use(
 		accesslog.Handler(logger),
@@ -90,24 +140,43 @@ func buildHandler(logger log.Logger, db *dbcontext.DB, cfg *config.Config) http.
 	healthcheck.RegisterHandlers(router, Version)
 
 	rg := router.Group("/v1")
-
 	authHandler := auth.Handler(cfg.JWTSigningKey)
 
-	album.RegisterHandlers(rg.Group(""),
-		album.NewService(album.NewRepository(db, logger), logger),
-		authHandler, logger,
-	)
-
-	auth.RegisterHandlers(rg.Group(""),
+	// ── Auth ─────────────────────────────────────────────────────────────
+	authRepo := auth.NewsRepoAuth(db, logger)
+	auth.RegisterHandlers(
+		rg.Group(""),
 		auth.NewService(cfg.JWTSigningKey, cfg.JWTExpiration, logger, authRepo),
 		authHandler,
 		logger,
 	)
 
+	// ── Album ────────────────────────────────────────────────────────────
+	album.RegisterHandlers(
+		rg.Group(""),
+		album.NewService(album.NewRepository(db, logger), logger),
+		authHandler,
+		logger,
+	)
+
+	// ── File ─────────────────────────────────────────────────────────────
+	// NewService artık FileValidator da alıyor.
+	// ImageValidator: JPEG, PNG, WebP destekler.
+	// Farklı validator inject ederek PDF, video desteği eklenebilir.
+	fileService := file.NewService(
+		file.NewFileRepository(db),
+		fileStorage,
+		logger,
+		file.NewImageValidator(),
+		cfg.Storage.Bucket,
+		cfg.Storage.Prefix,
+	)
+	file.RegisterHandlers(rg.Group(""), fileService, authHandler, logger)
+
 	return router
 }
 
-// logDBQuery returns a logging function that can be used to log SQL queries.
+// logDBQuery, SQL sorgu loglaması için kullanılır.
 func logDBQuery(logger log.Logger) dbx.QueryLogFunc {
 	return func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
 		if err == nil {
@@ -118,7 +187,7 @@ func logDBQuery(logger log.Logger) dbx.QueryLogFunc {
 	}
 }
 
-// logDBExec returns a logging function that can be used to log SQL executions.
+// logDBExec, SQL execution loglaması için kullanılır.
 func logDBExec(logger log.Logger) dbx.ExecLogFunc {
 	return func(ctx context.Context, t time.Duration, sql string, result sql.Result, err error) {
 		if err == nil {
