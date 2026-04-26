@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/harunoztekin50/go-rest-api-monolith.git/internal/entity"
 	"github.com/harunoztekin50/go-rest-api-monolith.git/pkg/log"
@@ -72,7 +73,12 @@ type PresignedDownloadInput struct {
 
 type Service interface {
 	UploadFile(ctx context.Context, input UploadFileInput) (*UploadFileResult, error)
+	ListUserFiles(ctx context.Context, userID string) ([]FileListItem, error) // YENİ
 }
+
+// ─────────────────────────────────────────────
+// UploadFile DTOs
+// ─────────────────────────────────────────────
 
 type UploadFileInput struct {
 	UserID           string
@@ -85,6 +91,38 @@ type UploadFileResult struct {
 	ObjectKey string `json:"object_key"`
 	ReadURL   string `json:"read_url,omitempty"`
 }
+
+// ─────────────────────────────────────────────
+// ListUserFiles DTOs
+// ─────────────────────────────────────────────
+
+// FileListItem, kullanıcıya döndürülen dosya özeti.
+//
+// Neden entity.File değil?
+//
+//	entity iç domain modelidir; DB sütun isimleri ve iş kuralları içerir.
+//	Bunu doğrudan dışarıya açarsak, entity değiştiğinde handler/client kırılır.
+//	DTO bu sınırı çizer: service dışı hiçbir katman entity'nin iç yapısını bilmez.
+//
+// ReadURL neden omitempty?
+//
+//	Presign işlemi R2 SDK'sında lokal yapılır (ağ çağrısı yok), çok hızlıdır.
+//	Yine de hata olasılığına karşı non-fatal tutulur: URL üretilemezse
+//	alan boş gelir, liste yine de döner.
+type FileListItem struct {
+	FileID           string    `json:"file_id"`
+	ObjectKey        string    `json:"object_key"`
+	OriginalFileName string    `json:"original_file_name"`
+	MimeType         string    `json:"mime_type"`
+	SizeBytes        int64     `json:"size_bytes"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+	ReadURL          string    `json:"read_url,omitempty"`
+}
+
+// ─────────────────────────────────────────────
+// Service Struct
+// ─────────────────────────────────────────────
 
 type service struct {
 	repo      FileRepository
@@ -112,6 +150,10 @@ func NewService(
 		keyPrefix: cleanPrefix(keyPrefix),
 	}
 }
+
+// ─────────────────────────────────────────────
+// UploadFile
+// ─────────────────────────────────────────────
 
 func (s *service) UploadFile(ctx context.Context, input UploadFileInput) (*UploadFileResult, error) {
 	// ── 1. Input validation ──────────────────────────────────────────────
@@ -205,6 +247,59 @@ func (s *service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 		ObjectKey: objectKey,
 		ReadURL:   readURL,
 	}, nil
+}
+
+// ─────────────────────────────────────────────
+// ListUserFiles
+// ─────────────────────────────────────────────
+
+// ListUserFiles, kullanıcının R2'ye yüklediği tüm dosyaları
+// metadata + presigned URL ile birlikte döndürür.
+//
+// Akış:
+//  1. userID validate et
+//  2. DB'den uploaded statüsündeki dosyaları çek
+//  3. Her dosya için presigned URL üret (non-fatal)
+//  4. []FileListItem dön
+//
+// Neden presign burada non-fatal?
+//
+//	Liste isteği, URL üretiminden bağımsız bir işlemdir.
+//	R2 erişim sorunu olsa bile kullanıcı dosya listesini görebilmeli.
+//	URL boş gelirse client "önizleme yok" gösterir, liste yine çalışır.
+func (s *service) ListUserFiles(ctx context.Context, userID string) ([]FileListItem, error) {
+	// ── 1. Input validation ──────────────────────────────────────────────
+	if strings.TrimSpace(userID) == "" {
+		return nil, &ErrInvalidInput{Field: "user_id", Message: "required"}
+	}
+
+	// ── 2. DB'den dosyaları çek ──────────────────────────────────────────
+	files, err := s.repo.ListFilesByUserID(ctx, userID)
+	if err != nil {
+		s.logger.With(ctx).Errorf("ListFilesByUserID failed: userID=%s err=%v", userID, err)
+		return nil, fmt.Errorf("dosyalar listelenemedi: %w", err)
+	}
+
+	// ── 3. Her dosya için presigned URL üret, DTO'ya dönüştür ───────────
+	// make([]FileListItem, 0, len(files)):
+	//   len=0 → boş başlıyor (append güvenli)
+	//   cap=len(files) → kaç eleman geleceğini biliyoruz, Go slice'ı
+	//   büyütmek için yeniden allocate etmez → gereksiz heap baskısı yok.
+	result := make([]FileListItem, 0, len(files))
+	for _, f := range files {
+		result = append(result, FileListItem{
+			FileID:           f.ID,
+			ObjectKey:        f.ObjectKey,
+			OriginalFileName: f.OriginalFileName,
+			MimeType:         f.MimeType,
+			SizeBytes:        f.SizeBytes,
+			Status:           string(f.Status),
+			CreatedAt:        f.CreatedAt,
+			ReadURL:          s.tryGeneratePresignedURL(ctx, f.ID, f.ObjectKey),
+		})
+	}
+
+	return result, nil
 }
 
 // ─────────────────────────────────────────────

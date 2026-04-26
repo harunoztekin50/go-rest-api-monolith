@@ -47,6 +47,7 @@ func RegisterHandlers(
 
 	rg.Use(authHandler)
 	rg.Post("/files/upload", r.uploadFile)
+	rg.Get("/files", r.listUserFiles) // YENİ: kullanıcının dosyalarını listele
 }
 
 // ─────────────────────────────────────────────
@@ -135,21 +136,12 @@ func (r *resource) uploadFile(c *routing.Context) error {
 	})
 
 	// ── 6. Hata tipine göre doğru HTTP status ────────────────────────────
-	// errors.As: hata zincirinde (wrap edilmiş) doğru tipi arar.
-	// Switch ile typed error → HTTP status eşleşmesi yapılır.
-	//
-	// Neden fmt.Errorf("...").Error() client'a gönderilmez?
-	//   - İç hata mesajları DB adı, dosya yolu, stack trace içerebilir.
-	//   - Bunlar güvenlik açığıdır (information disclosure).
-	//   - Client sadece ne yapacağını bilmesi gereken mesajı alır.
 	if err != nil {
 		return r.handleServiceError(c, err)
 	}
 
 	// ── 7. Başarı yanıtı ─────────────────────────────────────────────────
 	// 201 Created: Yeni kaynak oluşturulduğunda 200 değil 201 kullanılır.
-	// RFC 7231: "The 201 response payload typically describes and links to
-	// the resource(s) created."
 	return writeJSON(c, http.StatusCreated, uploadResponse{
 		FileID:    result.FileID,
 		ObjectKey: result.ObjectKey,
@@ -157,13 +149,71 @@ func (r *resource) uploadFile(c *routing.Context) error {
 	})
 }
 
-// handleServiceError, service katmanından gelen typed error'ları
+// ─────────────────────────────────────────────
+// listUserFiles Handler
+//
+// Sorumlulukları:
+//   1. Kimlik doğrulama kontrolü
+//   2. Service katmanına delege et
+//   3. Hata tipine göre doğru HTTP status dön
+//   4. Başarı yanıtı yaz
+//
+// Handler'ın YAPMADIĞI şeyler (servisin işi):
+//   - DB sorgusu
+//   - Presigned URL üretimi
+//   - Kullanıcıya ait olmayan dosyaları filtreleme
+//
+// Neden query param yok?
+//   userID zaten JWT'den alınır — URL'de taşımaya gerek yok.
+//   Başka user'ın dosyalarına erişim mimari olarak imkânsız:
+//   service sadece currentUser.GetID() ile sorgular.
+// ─────────────────────────────────────────────
+
+func (r *resource) listUserFiles(c *routing.Context) error {
+	// ── 1. Kimlik doğrulama ──────────────────────────────────────────────
+	currentUser := auth.CurrentUser(c.Request.Context())
+	if currentUser == nil {
+		return writeJSON(c, http.StatusUnauthorized, errorResponse{
+			Error: "unauthorized",
+		})
+	}
+
+	// ── 2. Service katmanına delege et ───────────────────────────────────
+	// userID'yi URL'den veya body'den almıyoruz — JWT'den alıyoruz.
+	// Bu, bir kullanıcının başka kullanıcının dosyalarını listelemesini
+	// mimari olarak engeller; ayrıca ek bir yetki kontrolüne gerek kalmaz.
+	files, err := r.service.ListUserFiles(c.Request.Context(), currentUser.GetID())
+	if err != nil {
+		return r.handleServiceError(c, err)
+	}
+
+	// ── 3. Başarı yanıtı ─────────────────────────────────────────────────
+	// Neden fileListResponse wrapper'ı?
+	//   Direkt []FileListItem göndermek yerine {"files": [...], "count": N}
+	//   göndermek daha iyi bir API tasarımıdır:
+	//   - Client toplam sayıyı ayrıca saymak zorunda kalmaz.
+	//   - İleride pagination eklenirse (total, page, limit) wrapper'a
+	//     eklenir, mevcut "files" alanı bozulmaz → geriye dönük uyumlu.
+	//   - JSON root'u dizi olursa bazı HTTP client'ları ve güvenlik araçları
+	//     şikâyet eder (JSON array injection riski — eski tarayıcılarda).
+	return writeJSON(c, http.StatusOK, fileListResponse{
+		Files: files,
+		Count: len(files),
+	})
+}
+
+// ─────────────────────────────────────────────
+// handleServiceError
+//
+// Service katmanından gelen typed error'ları
 // doğru HTTP status koduna ve client-safe mesajlara dönüştürür.
 //
 // Bu fonksiyon handler'ın en kritik parçasıdır:
 //   - Typed error → HTTP status eşleşmesi merkezi bir yerde.
 //   - İç detaylar loglanır, client'a asla gönderilmez.
 //   - Yeni hata tipi eklenirse sadece burası değişir.
+// ─────────────────────────────────────────────
+
 func (r *resource) handleServiceError(c *routing.Context, err error) error {
 	var (
 		unsupportedMime *ErrUnsupportedMimeType
@@ -194,9 +244,9 @@ func (r *resource) handleServiceError(c *routing.Context, err error) error {
 
 	default:
 		// 500: Beklenmeyen hata — logla ama detayı client'a verme.
-		r.logger.With(c.Request.Context()).Errorf("uploadFile unexpected error: %v", err)
+		r.logger.With(c.Request.Context()).Errorf("unexpected service error: %v", err)
 		return writeJSON(c, http.StatusInternalServerError, errorResponse{
-			Error: "upload failed",
+			Error: "internal server error",
 		})
 	}
 }
@@ -220,6 +270,17 @@ type uploadResponse struct {
 	FileID    string `json:"file_id"`
 	ObjectKey string `json:"object_key"`
 	ReadURL   string `json:"read_url,omitempty"`
+}
+
+// fileListResponse, liste endpoint'inin dış yapısı.
+//
+// Neden dizi değil wrapper object?
+//  1. İleride pagination (total, page, limit) eklemek geriye dönük uyumlu olur.
+//  2. JSON root dizisi bazı güvenlik araçlarında uyarı tetikler.
+//  3. Count alanı client'ın ayrıca len() yapmasını önler.
+type fileListResponse struct {
+	Files []FileListItem `json:"files"`
+	Count int            `json:"count"`
 }
 
 // writeJSON, ozzo-routing context'ine JSON yanıt yazar.

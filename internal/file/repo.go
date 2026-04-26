@@ -14,6 +14,8 @@ type FileRepository interface {
 	CreateFile(ctx context.Context, file entity.File) error
 	GetFileByID(ctx context.Context, id string) (*entity.File, error)
 	UpdateFileStatus(ctx context.Context, id string, status entity.FileStatus) error
+	ListFilesByUserID(ctx context.Context, userID string) ([]entity.File, error) // YENİ
+
 }
 
 type repository struct {
@@ -126,4 +128,35 @@ func (r *repository) UpdateFileStatus(ctx context.Context, id string, status ent
 		Execute()
 
 	return err
+}
+
+func (r *repository) ListFilesByUserID(ctx context.Context, userID string) ([]entity.File, error) {
+	var files []entity.File
+
+	err := r.db.DB().WithContext(ctx).
+		Select(
+			"id",
+			"user_id",
+			"bucket_name",
+			"object_key",
+			"original_file_name",
+			"mime_type",
+			"size_bytes",
+			"status",
+			"created_at",
+			"updated_at",
+		).
+		From("files").
+		Where(dbx.HashExp{
+			"user_id": userID,
+			"status":  string(entity.FileStatusUploaded), // silinmiş/pending dosyaları getirme
+		}).
+		OrderBy("created_at DESC").
+		All(&files)
+
+	if err != nil {
+		return nil, fmt.Errorf("kullanıcı dosyaları sorgulanamadı: %w", err)
+	}
+
+	return files, nil
 }
